@@ -6,7 +6,6 @@ export interface AppConfig {
   deviceId: string;
   productId: string;
   eventName: string;
-  variableName: string;
   functionName: string;
   mongoUri: string;
   mongoDatabase: string;
@@ -25,12 +24,12 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
     clientSecret: text('PARTICLE_CLIENT_SECRET'),
     deviceId: text('PARTICLE_DEVICE_ID', mode === 'mock' ? 'mock-photon-2' : ''),
     productId: text('PARTICLE_PRODUCT_ID'),
-    eventName: text('PARTICLE_EVENT_NAME', 'CounterEvent'),
-    variableName: text('PARTICLE_VARIABLE_NAME', 'counter'),
-    functionName: text('PARTICLE_FUNCTION_NAME', 'setCounter'),
+    eventName: text('PARTICLE_EVENT_NAME', 'training'),
+    functionName: text('PARTICLE_FUNCTION_NAME', 'resetTotal'),
     mongoUri: text('MONGODB_URI'),
     mongoDatabase: text('MONGODB_DATABASE', 'iot_starter'),
-    retentionDays: Number(text('READING_RETENTION_DAYS', '7'))
+    // Long enough for the dashboard's 30-day view.
+    retentionDays: Number(text('READING_RETENTION_DAYS', '30'))
   };
   if (config.origin) {
     let url: URL;
@@ -52,7 +51,6 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
   }
   for (const [name, value] of Object.entries({
     PARTICLE_EVENT_NAME: config.eventName,
-    PARTICLE_VARIABLE_NAME: config.variableName,
     PARTICLE_FUNCTION_NAME: config.functionName
   })) {
     if (!/^[a-zA-Z][a-zA-Z0-9_/-]{0,63}$/.test(value))

@@ -1,27 +1,47 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Collector } from '../src/lib/server/collector';
 import { parseConfig } from '../src/lib/server/config';
-import { MemoryReadings, normalizeEvent, type ReadingStore } from '../src/lib/server/readings';
+import {
+  MemoryTrainingEvents,
+  normalizeEvent,
+  type TrainingEventStore
+} from '../src/lib/server/training-events';
 import { WriteQueue } from '../src/lib/server/write-queue';
 import { MockDevice } from '../src/lib/server/mock';
 
 describe('collector lifecycle and bounded persistence', () => {
-  it('records without a dashboard and stops its stream cleanly', async () => {
+  it('records a simulated set without a dashboard and stops its stream cleanly', async () => {
     const config = parseConfig({});
-    const store = new MemoryReadings();
-    const device = new MockDevice(config);
+    const store = new MemoryTrainingEvents();
+    const device = new MockDevice(config, {
+      firstRestMs: [1, 1],
+      restMs: [1, 1],
+      repMs: [1, 1],
+      repsPerSet: [4, 4],
+      endPauseMs: 1
+    });
     const collector = new Collector(config, store, device);
     collector.start();
-    await device.resetCounter();
-    await vi.waitFor(() => expect(collector.status.saved).toBe(1));
-    expect((await store.latest())?.counter).toBe(0);
+    await vi.waitFor(() => expect(collector.status.saved).toBeGreaterThanOrEqual(2));
     await collector.stop();
+    const [start, end] = await store.list(new Date(0), 500).then((events) => events.slice(0, 2));
+    // Like the firmware: start at the third repetition, then the full set at the end.
+    expect(start).toMatchObject({ type: 'start', total: 3 });
+    expect(end).toMatchObject({ type: 'end', reps: 4, total: 4 });
     expect(collector.status.connection).toBe('stopped');
     expect(collector.status.pending).toBe(0);
+    expect(collector.status.rejected).toBe(0);
+  });
+  it('resets the simulated total and reports no running set after stopping', async () => {
+    const device = new MockDevice(parseConfig({}));
+    await device.seed(new MemoryTrainingEvents());
+    expect((await device.readState()).totalCount).toBeGreaterThan(1000);
+    expect(await device.resetTotal()).toBe(0);
+    expect(await device.readState()).toEqual({ repetitions: 0, totalCount: 0, sensorOk: true });
   });
   it('counts malformed events and continues processing', async () => {
     const config = parseConfig({});
-    const store = new MemoryReadings();
+    const store = new MemoryTrainingEvents();
     const collector = new Collector(config, store, new MockDevice(config));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     collector.accept({ event: config.eventName, data: '{' });
@@ -29,7 +49,7 @@ describe('collector lifecycle and bounded persistence', () => {
       event: config.eventName,
       data: JSON.stringify({
         coreid: config.deviceId,
-        data: '12',
+        data: JSON.stringify({ type: 'start', total: 12 }),
         published_at: new Date().toISOString()
       })
     });
@@ -48,7 +68,7 @@ describe('collector lifecycle and bounded persistence', () => {
         throw new Error('offline');
       }
     };
-    const collector = new Collector(parseConfig({}), new MemoryReadings(), source);
+    const collector = new Collector(parseConfig({}), new MemoryTrainingEvents(), source);
     collector.start();
     await vi.advanceTimersByTimeAsync(1500);
     expect(connects).toBe(2);
@@ -60,9 +80,9 @@ describe('collector lifecycle and bounded persistence', () => {
   });
   it('drops overflow instead of growing memory and retries a failed database write', async () => {
     const config = parseConfig({});
-    const collector = new Collector(config, new MemoryReadings(), new MockDevice(config));
+    const collector = new Collector(config, new MemoryTrainingEvents(), new MockDevice(config));
     const insert = vi.fn().mockRejectedValueOnce(new Error('db offline')).mockResolvedValue(true);
-    const store: ReadingStore = {
+    const store: TrainingEventStore = {
       insert,
       list: async () => [],
       latest: async () => null,
@@ -74,7 +94,7 @@ describe('collector lifecycle and bounded persistence', () => {
         event: config.eventName,
         data: JSON.stringify({
           coreid: config.deviceId,
-          data: '1',
+          data: JSON.stringify({ type: 'start', total: 1 }),
           published_at: new Date().toISOString()
         })
       },
@@ -91,9 +111,9 @@ describe('collector lifecycle and bounded persistence', () => {
   });
   it('drops a write after the retry budget is exhausted', async () => {
     const config = parseConfig({});
-    const collector = new Collector(config, new MemoryReadings(), new MockDevice(config));
+    const collector = new Collector(config, new MemoryTrainingEvents(), new MockDevice(config));
     const insert = vi.fn().mockRejectedValue(new Error('offline'));
-    const store: ReadingStore = {
+    const store: TrainingEventStore = {
       insert,
       list: async () => [],
       latest: async () => null,
@@ -104,7 +124,10 @@ describe('collector lifecycle and bounded persistence', () => {
       id: 'test',
       deviceId: config.deviceId,
       eventName: config.eventName,
-      counter: 1,
+      type: 'start',
+      reps: null,
+      durationS: null,
+      total: 1,
       publishedAt: new Date().toISOString(),
       receivedAt: new Date().toISOString()
     });

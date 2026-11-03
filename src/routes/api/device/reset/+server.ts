@@ -3,7 +3,7 @@ import { getRuntime } from '#lib/server/runtime.ts';
 import { commands, failure } from '#lib/server/http.ts';
 
 export const POST: RequestHandler = async ({ request, url }) => {
-  const { config, device } = await getRuntime();
+  const { config, device, deviceState } = await getRuntime();
   // Public controls, but cross-origin websites cannot invoke them via a browser.
   if (request.headers.get('origin') !== (config.origin || url.origin))
     return failure('A same-origin request is required.', 403);
@@ -13,8 +13,11 @@ export const POST: RequestHandler = async ({ request, url }) => {
     });
   // No arbitrary function name, device ID or argument accepted from the browser.
   try {
-    return Response.json({ returnValue: await device.resetCounter() });
+    return Response.json({ returnValue: await device.resetTotal() });
   } catch {
-    return failure('Reset could not be confirmed. Read the device value before trying again.', 502);
+    return failure('Reset could not be confirmed. Read the device before trying again.', 502);
+  } finally {
+    // The total may have changed even when the confirmation was lost.
+    deviceState.invalidate();
   }
 };

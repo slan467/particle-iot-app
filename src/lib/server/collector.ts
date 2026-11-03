@@ -3,7 +3,7 @@ import type { AppConfig } from './config';
 import { pause } from './async';
 import { connectionMessage, ParticleError } from './particle/errors';
 import type { StreamEvent } from './particle/events';
-import { normalizeEvent, type ReadingStore } from './readings';
+import { normalizeEvent, type TrainingEventStore } from './training-events';
 import { WriteQueue } from './write-queue';
 
 export interface EventSource {
@@ -22,7 +22,7 @@ export class Collector {
 
   constructor(
     private config: AppConfig,
-    store: ReadingStore,
+    store: TrainingEventStore,
     private source: EventSource
   ) {
     this.status = {
@@ -51,11 +51,11 @@ export class Collector {
 
   accept = (event: StreamEvent) => {
     try {
-      const reading = normalizeEvent(event, this.config.deviceId, this.config.eventName);
-      if (!reading) return;
+      const training = normalizeEvent(event, this.config.deviceId, this.config.eventName);
+      if (!training) return;
       this.status.received++;
-      this.status.lastEventAt = reading.receivedAt;
-      this.writer.enqueue(reading);
+      this.status.lastEventAt = training.receivedAt;
+      this.writer.enqueue(training);
     } catch {
       this.status.rejected++;
       console.warn('[collector] Rejected a malformed event. Check the firmware payload contract.');

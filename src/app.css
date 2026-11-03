@@ -318,6 +318,12 @@ h1 {
   background: #eef3e6;
   border-color: #dce5ce;
 }
+.metric-card.featured.live {
+  border-color: #34715a;
+}
+.metric-card.live .metric-label > span {
+  color: #34715a;
+}
 .metric-label {
   display: flex;
   justify-content: space-between;
@@ -413,11 +419,18 @@ h1 {
   align-items: center;
   gap: 7px;
 }
-.legend-line {
+.legend-bar {
   display: inline-block;
-  width: 14px;
-  height: 2px;
+  width: 7px;
+  height: 10px;
+  border-radius: 2px;
   background: #34715a;
+}
+.chart-bar {
+  fill: #34715a;
+}
+.chart-bar:hover {
+  fill: #80b78e;
 }
 .muted {
   color: var(--muted);

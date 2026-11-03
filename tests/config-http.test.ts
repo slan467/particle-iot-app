@@ -3,8 +3,13 @@ import { parseConfig } from '../src/lib/server/config';
 import { CommandBudget, parseHistory } from '../src/lib/server/http';
 
 describe('configuration and public API bounds', () => {
-  it('starts in mock mode without credentials', () => {
-    expect(parseConfig({}).mode).toBe('mock');
+  it('starts in mock mode without credentials, using the dumbbell contract', () => {
+    expect(parseConfig({})).toMatchObject({
+      mode: 'mock',
+      eventName: 'training',
+      functionName: 'resetTotal',
+      retentionDays: 30
+    });
   });
   it('fails closed on a mode typo', () => {
     expect(() => parseConfig({ APP_MODE: 'production' })).toThrow('APP_MODE');
@@ -48,11 +53,11 @@ describe('configuration and public API bounds', () => {
     expect(() => parseConfig({ READING_RETENTION_DAYS: '0' })).toThrow('READING_RETENTION_DAYS');
   });
   it('bounds query size and time range', () => {
-    expect(parseHistory(new URLSearchParams('minutes=15&limit=50'), 1_000_000)).toEqual({
-      since: new Date(100_000),
+    expect(parseHistory(new URLSearchParams('days=1&limit=50'), 100_000_000)).toEqual({
+      since: new Date(100_000_000 - 86_400_000),
       limit: 50
     });
-    for (const query of ['limit=501', 'minutes=99999', 'limit=-2', 'minutes=NaN', 'limit=1.2']) {
+    for (const query of ['limit=501', 'days=31', 'days=0', 'limit=-2', 'days=NaN', 'limit=1.2']) {
       expect(() => parseHistory(new URLSearchParams(query))).toThrow();
     }
   });

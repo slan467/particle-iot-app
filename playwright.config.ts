@@ -38,9 +38,8 @@ export default defineConfig({
       APP_ORIGIN: origin,
       HOST: '127.0.0.1',
       PORT: '4179',
-      PARTICLE_EVENT_NAME: 'CounterEvent',
-      PARTICLE_VARIABLE_NAME: 'counter',
-      PARTICLE_FUNCTION_NAME: 'setCounter',
+      PARTICLE_EVENT_NAME: 'training',
+      PARTICLE_FUNCTION_NAME: 'resetTotal',
       SHUTDOWN_TIMEOUT: '1'
     }
   }

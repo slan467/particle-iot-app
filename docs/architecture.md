@@ -13,7 +13,7 @@ flowchart LR
     Collector[Collector and validation]
     Queue[Bounded write queue]
     Routes[SvelteKit pages and API]
-    Repo[Reading repository]
+    Repo[Training event repository]
     Auth --> Transport
     Transport --> Collector --> Queue --> Repo
     Routes --> Transport
@@ -30,31 +30,34 @@ The application starts even if Particle or MongoDB is temporarily unavailable. I
 
 ## Modules
 
-| Module                                     | Responsibility                                                                     |
-| ------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `src/env.ts`, `server/config.ts`           | Declare private runtime variables, apply defaults, validate live-mode requirements |
-| `particle/auth.ts`                         | Cache one short-lived token and share concurrent exchanges                         |
-| `particle/client.ts`                       | Fixed device/function/variable REST calls; stream timeout and cleanup              |
-| `particle/events.ts`                       | Incremental SSE framing independent of network chunks                              |
-| `server/readings.ts`                       | Counter payload normalization, shared storage interface, mock repository           |
-| `server/collector.ts`                      | Lifecycle, exact device/event checks, status and reconnection                      |
-| `server/write-queue.ts`                    | One sequential writer; capped queue and retry budget                               |
-| `mongodb/client.ts`, `mongodb/readings.ts` | Shared pool, indexes, inserts, bounded queries, retention                          |
-| `server/mock.ts`                           | Server-side firmware simulation feeding the normal collector                       |
-| `server/runtime.ts`                        | Compose integrations once; supply dashboard snapshots                              |
-| `routes/api`                               | HTTP validation, public command budget, sanitized responses                        |
+| Module                                            | Responsibility                                                                     |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `src/env.ts`, `server/config.ts`                  | Declare private runtime variables, apply defaults, validate live-mode requirements |
+| `particle/auth.ts`                                | Cache one short-lived token and share concurrent exchanges                         |
+| `particle/client.ts`                              | Fixed device/function/variable REST calls; stream timeout and cleanup              |
+| `server/hantel.ts`                                | Device contract: fixed variable names, value limits, reset argument                |
+| `particle/events.ts`                              | Incremental SSE framing independent of network chunks                              |
+| `server/training-events.ts`                       | Training payload normalization, shared storage interface, memory repository        |
+| `src/lib/training.ts`                             | Pure set/statistics/live-state logic shared by server and browser                  |
+| `server/device-state.ts`                          | Five-second shared cache for device variable reads                                 |
+| `server/collector.ts`                             | Lifecycle, exact device/event checks, status and reconnection                      |
+| `server/write-queue.ts`                           | One sequential writer; capped queue and retry budget                               |
+| `mongodb/client.ts`, `mongodb/training-events.ts` | Shared pool, indexes, inserts, bounded queries, retention                          |
+| `server/mock.ts`                                  | Server-side dumbbell simulation feeding the normal collector                       |
+| `server/runtime.ts`                               | Compose integrations once; supply dashboard snapshots                              |
+| `routes/api`                                      | HTTP validation, public command budget, sanitized responses                        |
 
-Keep project-specific payload mapping in `normalizeEvent`. The current mapping accepts counter events; changing that contract requires updating the shared reading type and storage mapping without rewriting token handling or stream reconnection. Mock and live devices implement the same small interface.
+Keep project-specific payload mapping in `normalizeEvent`. The current mapping accepts `training` start/end events; changing that contract requires updating the shared `TrainingEvent` type and storage mapping without rewriting token handling or stream reconnection. Mock and live devices implement the same small interface.
 
-Counter values use the nonnegative range of the firmware's signed 32-bit integer, 0–2,147,483,647. `server/counter.ts` shares this limit between event validation, variable reads and the mock device. The counter stops at the integer limit instead of wrapping; reset is an explicit device command. Widening the previous one-million limit does not change the MongoDB record shape or require a data migration.
+Totals use the nonnegative range of the firmware's signed 32-bit integer, 0–2,147,483,647. Sets are bounded to 1–10,000 repetitions and 0–86,400 seconds. `server/hantel.ts` shares these limits between event validation and variable reads. Reset is an explicit device command and does not touch stored history.
 
 ## Persistence and resource limits
 
-Live records use collection `readings`. `_id` is a SHA-256 fingerprint of device ID, exact event name, normalized publication timestamp and value. This suppresses identical duplicate observations, including an insert retried after an ambiguous acknowledgement. It is **not** a Particle-provided unique event ID: two genuinely separate identical publications in the same millisecond collapse into one record.
+Live records use collection `training_events`. A `readings` collection from the counter template is neither read nor deleted. `_id` is a SHA-256 fingerprint of device ID, exact event name, normalized publication timestamp, type, repetitions, duration and total. This suppresses identical duplicate observations, including an insert retried after an ambiguous acknowledgement. It is **not** a Particle-provided unique event ID: two genuinely separate identical publications in the same millisecond collapse into one record.
 
-An index on `{ deviceId, eventName, publishedAt }` supports scoped history. An `expiresAt` TTL index expires records seven days after receipt by default. TTL deletion is asynchronous; queries also exclude expired records. Updating retention affects new records only. Dates are stored as BSON Dates and serialized as ISO strings at the API boundary.
+An index on `{ deviceId, eventName, publishedAt }` supports scoped history. An `expiresAt` TTL index expires records 30 days after receipt by default. TTL deletion is asynchronous; queries also exclude expired records. Updating retention affects new records only. Dates are stored as BSON Dates and serialized as ISO strings at the API boundary.
 
-The MongoDB client has a maximum pool size of five and bounded connection/query timeouts. History returns the newest 120 records by default, in chronological order. Clients may request 1–500 records over 1–1,440 minutes. This is a bounded recent window, not aggregation over every event in a day. Add downsampling when a full-day overview becomes necessary.
+The MongoDB client has a maximum pool size of five and bounded connection/query timeouts. History returns the newest 500 events (250 sets) by default, in chronological order. Clients may request 1–500 events over 1–30 days. This is a bounded recent window, not aggregation over every set in the range. Add server-side aggregation when a longer overview becomes necessary.
 
 The write queue holds at most 100 records including the in-flight write. It retries each record up to three times with delays before dropping it. Overflow drops the incoming record and increments `dropped`; it does not grow memory indefinitely. Shutdown allows up to eight seconds for draining before aborting further queue work. An in-flight database operation may finish within its own timeout. Pending records are not durable across process termination.
 

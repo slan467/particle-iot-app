@@ -2,18 +2,21 @@ import * as env from '$app/env/private';
 import type { DashboardSnapshot } from '../types';
 import { parseConfig } from './config';
 import { Collector } from './collector';
-import { MemoryReadings } from './readings';
+import { MemoryTrainingEvents } from './training-events';
 import { MockDevice } from './mock';
-import { MongoReadings } from './mongodb/readings';
+import { MongoTrainingEvents } from './mongodb/training-events';
 import { ParticleClient } from './particle/client';
+import { DeviceStateCache } from './device-state';
 
 async function createRuntime() {
   const config = parseConfig(env);
-  const store = config.mode === 'mock' ? new MemoryReadings() : new MongoReadings(config);
+  const store =
+    config.mode === 'mock' ? new MemoryTrainingEvents() : new MongoTrainingEvents(config);
   const device = config.mode === 'mock' ? new MockDevice(config) : new ParticleClient(config);
   if (device instanceof MockDevice) await device.seed(store);
   const collector = new Collector(config, store, device);
   collector.start();
+  const deviceState = new DeviceStateCache(() => device.readState());
   let stopped = false;
   const stop = async () => {
     if (stopped) return;
@@ -26,20 +29,20 @@ async function createRuntime() {
   return {
     config,
     device,
+    deviceState,
     collector,
     store,
     stop,
     async snapshot(
-      since = new Date(Date.now() - 3600_000),
-      limit = 120
+      since = new Date(Date.now() - 7 * 86_400_000),
+      limit = 500
     ): Promise<DashboardSnapshot> {
-      const [readings, latest] = await Promise.all([store.list(since, limit), store.latest()]);
+      const [events, latest] = await Promise.all([store.list(since, limit), store.latest()]);
       return {
         status: { ...collector.status },
-        readings,
+        events,
         latest,
         eventName: config.eventName,
-        variableName: config.variableName,
         functionName: config.functionName,
         deviceLabel:
           config.mode === 'mock' ? 'Photon 2 simulator' : `Photon 2 · …${config.deviceId.slice(-6)}`

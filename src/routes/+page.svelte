@@ -1,9 +1,13 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import type { DashboardSnapshot, CollectorStatus } from '#lib/types.ts';
-  import HistoryChart from '#lib/components/HistoryChart.svelte';
+  import type { DashboardSnapshot, CollectorStatus, DeviceState } from '#lib/types.ts';
+  import { buildSets, liveSince, setsToday, summarize } from '#lib/training.ts';
+  import SetChart from '#lib/components/SetChart.svelte';
 
   const refreshIntervalMs = 10_000;
+  // The server caches device reads, so open tabs share requests and the command budget.
+  const liveReadMs = 5_000;
+  const restReadMs = 30_000;
 
   let { data } = $props();
   let snapshot = $state<DashboardSnapshot | null>(untrack(() => data.snapshot));
@@ -11,18 +15,23 @@
   let error = $state(untrack(() => data.initialError));
   let feedback = $state('');
   let busy = $state<'read' | 'reset' | null>(null);
-  let variable = $state<number | null>(null);
-  let readAt = $state<string | null>(null);
-  let minutes = $state('60');
-  let clearedAt = $state(0);
+  let device = $state<DeviceState | null>(null);
+  let days = $state('7');
   let refreshing = $state(false);
   let hydrated = $state(false);
+  let now = $state(0);
   let mounted = false;
   let abort: AbortController | undefined;
-  let visibleReadings = $derived(
-    (snapshot?.readings ?? []).filter((r) => Date.parse(r.publishedAt) > clearedAt)
-  );
-  let recent = $derived([...(snapshot?.readings ?? [])].reverse().slice(0, 6));
+
+  let sets = $derived(buildSets(snapshot?.events ?? []));
+  let range = $derived(summarize(sets));
+  // "Today" uses the viewer's timezone, so it is only computed in the browser.
+  let today = $derived(hydrated ? summarize(setsToday(sets, new Date(now))) : null);
+  let liveAt = $derived(hydrated ? liveSince(snapshot?.latest ?? null, now) : null);
+  let live = $derived(liveAt !== null || (device?.repetitions ?? 0) > 0);
+  let recent = $derived([...sets].reverse().slice(0, 8));
+  let total = $derived(device?.totalCount ?? snapshot?.latest?.total ?? null);
+
   const time = (value: string | null | undefined) =>
     value
       ? hydrated
@@ -33,6 +42,12 @@
           })
         : new Date(value).toISOString().slice(11, 19) + ' UTC'
       : '—';
+  const date = (value: string) =>
+    hydrated
+      ? new Date(value).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })
+      : new Date(value).toISOString().slice(0, 10);
+  const duration = (seconds: number) =>
+    `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
   async function refresh() {
     if (refreshing) return;
@@ -40,13 +55,13 @@
     abort = new AbortController();
     const timeout = setTimeout(() => abort?.abort(), 12_000);
     try {
-      const [readingsResponse, statusResponse] = await Promise.all([
-        fetch(`/api/readings?minutes=${minutes}&limit=120`, { signal: abort.signal }),
+      const [trainingsResponse, statusResponse] = await Promise.all([
+        fetch(`/api/trainings?days=${days}&limit=500`, { signal: abort.signal }),
         fetch('/api/status', { signal: abort.signal })
       ]);
       if (statusResponse.ok) status = await statusResponse.json();
-      const result = await readingsResponse.json();
-      if (!readingsResponse.ok) throw new Error(result.error ?? 'Readings unavailable.');
+      const result = await trainingsResponse.json();
+      if (!trainingsResponse.ok) throw new Error(result.error ?? 'Training history unavailable.');
       snapshot = result;
       error = '';
     } catch (cause) {
@@ -58,33 +73,45 @@
     } finally {
       clearTimeout(timeout);
       refreshing = false;
+      now = Date.now();
     }
   }
 
-  async function command(action: 'read' | 'reset') {
-    busy = action;
-    feedback = '';
+  /** `manual` reads report their outcome; automatic reads fail quietly. */
+  async function readDevice(manual: boolean) {
+    if (manual) {
+      busy = 'read';
+      feedback = '';
+    }
     try {
-      const response = await fetch(
-        action === 'read' ? '/api/device/variable' : '/api/device/reset',
-        {
-          method: action === 'read' ? 'GET' : 'POST',
-          ...(action === 'reset'
-            ? { headers: { 'Content-Type': 'application/json' }, body: '{}' }
-            : {}),
-          signal: AbortSignal.timeout(20_000)
-        }
-      );
+      const response = await fetch('/api/device/state', { signal: AbortSignal.timeout(20_000) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? 'Device request failed.');
-      if (action === 'read') {
-        variable = result.value;
-        readAt = result.readAt;
-        feedback = 'Current variable read from the device.';
-      } else {
-        feedback = 'Reset confirmed by the device. Waiting for its event.';
-        await refresh();
-      }
+      device = result;
+      if (manual) feedback = 'Current state read from the device.';
+    } catch (cause) {
+      if (manual) feedback = cause instanceof Error ? cause.message : 'Device request failed.';
+    } finally {
+      if (manual) busy = null;
+    }
+  }
+
+  async function resetTotal() {
+    if (!confirm('Reset the total repetition count on the device to 0? Stored sets are kept.'))
+      return;
+    busy = 'reset';
+    feedback = '';
+    try {
+      const response = await fetch('/api/device/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(20_000)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? 'Device request failed.');
+      feedback = 'Reset confirmed by the device. The total starts again at 0.';
+      await readDevice(false);
     } catch (cause) {
       feedback = cause instanceof Error ? cause.message : 'Device request failed.';
     } finally {
@@ -95,46 +122,62 @@
   onMount(() => {
     hydrated = true;
     mounted = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
+    now = Date.now();
+    let historyTimer: ReturnType<typeof setTimeout>;
+    let deviceTimer: ReturnType<typeof setTimeout>;
+    const pollHistory = async () => {
       await refresh();
-      if (mounted) timer = setTimeout(poll, refreshIntervalMs);
+      if (mounted) historyTimer = setTimeout(pollHistory, refreshIntervalMs);
     };
-    void poll();
+    // Read faster while a set is running, so the live counter moves.
+    const pollDevice = async () => {
+      await readDevice(false);
+      if (mounted) deviceTimer = setTimeout(pollDevice, live ? liveReadMs : restReadMs);
+    };
+    void pollHistory();
+    void pollDevice();
     return () => {
       mounted = false;
-      clearTimeout(timer);
+      clearTimeout(historyTimer);
+      clearTimeout(deviceTimer);
       abort?.abort();
     };
   });
 </script>
 
 <svelte:head
-  ><title>Overview · Fieldwork IoT</title><meta
+  ><title>Training · Fieldwork IoT</title><meta
     name="description"
-    content="An IoT workspace for Particle Photon 2. Follow live readings, explore history and control your device."
+    content="An IoT dumbbell on a Particle Photon 2. Follow your current set, your training history and your totals."
   /></svelte:head
 >
 
 <header class="page-header">
   <div>
-    <div class="eyebrow">YOUR CONNECTED PROJECT</div>
-    <h1>Device overview<span class="heading-dot">.</span></h1>
-    <p>A little signal from the physical world.</p>
+    <div class="eyebrow">YOUR CONNECTED DUMBBELL</div>
+    <h1>Training overview<span class="heading-dot">.</span></h1>
+    <p>Every repetition, counted.</p>
   </div>
-  <a class="text-link" href="/guide">Make it your own <span aria-hidden="true">↗</span></a>
+  <a class="text-link" href="/guide">How it works <span aria-hidden="true">↗</span></a>
 </header>
 
 <div class="device-strip">
   <div class="device-name">
     <span class="device-icon" aria-hidden="true">◈</span>
     <div>
-      <strong>{snapshot?.deviceLabel ?? 'Particle device'}</strong><span>COUNTER PROJECT / 01</span>
+      <strong>{snapshot?.deviceLabel ?? 'Particle device'}</strong><span>DUMBBELL PROJECT / 01</span
+      >
     </div>
   </div>
   <div class="device-badges">
     <span class="badge neutral"
       >{status?.mode === 'mock' ? 'SIMULATED DEVICE' : 'PARTICLE CLOUD'}</span
+    ><span class="badge" class:warning={device ? !device.sensorOk : false} class:neutral={!device}
+      ><span class="status-dot"></span>{device
+        ? device.sensorOk
+          ? 'Sensor OK'
+          : 'Sensor fault'
+        : 'Sensor unknown'}</span
     ><span class="badge" class:warning={status?.connection !== 'connected'}
       ><span class="status-dot"></span>{status?.connection === 'connected'
         ? 'Collector connected'
@@ -146,40 +189,49 @@
 {#if status?.mode === 'mock'}<div class="mode-note">
     <span aria-hidden="true">✳</span>
     <p>
-      <strong>You’re in mock mode.</strong> Explore the app with a simulated Photon 2. No cloud credentials
-      needed.
+      <strong>You’re in mock mode.</strong> A simulated dumbbell trains a set every 20–40 seconds. No
+      cloud credentials needed.
     </p>
     <a href="/guide">Connect hardware →</a>
   </div>{/if}
 {#if error}<div class="alert" role="alert">
     {error}
-    {snapshot ? 'Showing the last available readings.' : ''}
+    {snapshot ? 'Showing the last available sets.' : ''}
   </div>{/if}
 {#if status?.connectionError}<div class="alert" role="status">{status.connectionError}</div>{/if}
 {#if status?.storageError}<div class="alert" role="status">{status.storageError}</div>{/if}
+{#if device && !device.sensorOk}<div class="alert" role="status">
+    The device reports a sensor fault. Check the LIS3DH wiring (SDA=D0, SCL=D1, 3V3, GND).
+  </div>{/if}
 
-<section class="metric-grid" aria-label="Device measurements">
-  <article class="metric-card featured">
-    <div class="metric-label">LATEST EVENT <span aria-hidden="true">↗</span></div>
-    <div class="metric-value">{snapshot?.latest?.counter ?? '—'}<span>count</span></div>
+<section class="metric-grid" aria-label="Training measurements">
+  <article class="metric-card featured" class:live>
+    <div class="metric-label">
+      {live ? 'SET IN PROGRESS' : 'CURRENT SET'} <span aria-hidden="true">{live ? '●' : '↗'}</span>
+    </div>
+    <div class="metric-value">{device?.repetitions ?? '—'}<span>reps</span></div>
     <div class="metric-caption">
-      {snapshot?.eventName ?? 'CounterEvent'} <span>· {time(snapshot?.latest?.publishedAt)}</span>
+      {#if live}
+        Training since {time(liveAt ?? device?.readAt)}
+      {:else}
+        Resting <span>· last set {time(sets.at(-1)?.endedAt)}</span>
+      {/if}
     </div>
   </article>
   <article class="metric-card">
-    <div class="metric-label">DEVICE VARIABLE <span aria-hidden="true">⌁</span></div>
-    <div class="metric-value">{variable ?? '—'}<span>count</span></div>
+    <div class="metric-label">TOTAL REPS <span aria-hidden="true">Σ</span></div>
+    <div class="metric-value">{total ?? '—'}<span>reps</span></div>
     <div class="metric-caption">
-      {readAt ? `Read at ${time(readAt)}` : 'Read directly from your device'}
+      {device ? `Read at ${time(device.readAt)}` : 'From the latest event'}
+      <span>· stored on the device</span>
     </div>
   </article>
   <article class="metric-card">
-    <div class="metric-label">STORED THIS SESSION <span aria-hidden="true">▤</span></div>
-    <div class="metric-value">{status?.saved ?? 0}<span>events</span></div>
+    <div class="metric-label">TODAY <span aria-hidden="true">◷</span></div>
+    <div class="metric-value">{today?.reps ?? '—'}<span>reps</span></div>
     <div class="metric-caption">
-      {status?.storage === 'memory'
-        ? 'In memory · resets on restart'
-        : 'MongoDB · persisted readings'}
+      {today ? `${today.sets} ${today.sets === 1 ? 'set' : 'sets'}` : '—'}
+      <span>· best set {today?.best ? `${today.best.reps} reps` : '—'}</span>
     </div>
   </article>
 </section>
@@ -188,59 +240,52 @@
   <section class="panel history-panel">
     <div class="panel-heading">
       <div>
-        <h2>Counter history</h2>
-        <p>Your device, over time.</p>
+        <h2>Repetitions per set</h2>
+        <p>Every bar is one finished set.</p>
       </div>
       <label class="select-label"
         ><span class="sr-only">History range</span><select
-          bind:value={minutes}
-          onchange={() => {
-            clearedAt = 0;
-            void refresh();
-          }}
-          ><option value="15">Last 15 minutes</option><option value="60">Last hour</option><option
-            value="1440">Last 24 hours</option
+          bind:value={days}
+          onchange={() => void refresh()}
+          ><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option
+            value="30">Last 30 days</option
           ></select
         ></label
       >
     </div>
     <div class="chart-key">
-      <span class="legend-line"></span>{snapshot?.eventName ?? 'CounterEvent'}<span class="muted"
-        >· newest {visibleReadings.length} readings</span
+      <span class="legend-bar"></span>{snapshot?.eventName ?? 'training'}<span class="muted"
+        >· {range.sets} sets · {range.reps} reps{range.averagePaceS !== null
+          ? ` · ${range.averagePaceS} s per rep`
+          : ''}</span
       >
     </div>
-    <HistoryChart readings={visibleReadings} />
+    <SetChart {sets} days={Number(days)} />
     <div class="panel-footer">
-      <span><span class="tiny-dot"></span>Updates every {refreshIntervalMs / 1000} seconds</span
-      ><button
-        class="quiet-button"
-        onclick={() => {
-          clearedAt = Date.now();
-        }}>Clear chart view</button
-      >
+      <span><span class="tiny-dot"></span>Updates every {refreshIntervalMs / 1000} seconds</span>
+      <span>{live ? 'Live set read every 5 seconds' : 'Device read every 30 seconds'}</span>
     </div>
   </section>
   <section class="panel controls-panel">
     <div class="panel-heading">
       <div>
         <h2>Device controls</h2>
-        <p>Send a small instruction.</p>
+        <p>Talk to the dumbbell.</p>
       </div>
       <span aria-hidden="true" class="control-symbol">⌘</span>
     </div>
     <div class="control-description">
-      <span class="mini-label">READ A VARIABLE</span>
-      <p>Ask the device for its current counter.</p>
-      <button class="button secondary" disabled={busy !== null} onclick={() => command('read')}
-        >{busy === 'read' ? 'Reading…' : 'Get counter value'}<span aria-hidden="true">↗</span
-        ></button
+      <span class="mini-label">READ VARIABLES</span>
+      <p>Ask for the current set, the total and the sensor status.</p>
+      <button class="button secondary" disabled={busy !== null} onclick={() => readDevice(true)}
+        >{busy === 'read' ? 'Reading…' : 'Read device now'}<span aria-hidden="true">↗</span></button
       >
     </div>
     <div class="control-description">
       <span class="mini-label">CALL A FUNCTION</span>
-      <p>Start counting from zero again.</p>
-      <button class="button primary" disabled={busy !== null} onclick={() => command('reset')}
-        >{busy === 'reset' ? 'Resetting…' : 'Reset counter to 0'}<span aria-hidden="true">↺</span
+      <p>Set the total back to zero. Stored sets stay in the history.</p>
+      <button class="button primary" disabled={busy !== null} onclick={resetTotal}
+        >{busy === 'reset' ? 'Resetting…' : 'Reset total count'}<span aria-hidden="true">↺</span
         ></button
       >
     </div>
@@ -253,20 +298,23 @@
 <section class="panel events-panel">
   <div class="panel-heading">
     <div>
-      <h2>Recent events</h2>
-      <p>Every reading has a story.</p>
+      <h2>Recent sets</h2>
+      <p>Your latest training, set by set.</p>
     </div>
     <span class="badge neutral">{status?.storage === 'mongodb' ? 'MONGODB' : 'MEMORY STORE'}</span>
   </div>
   <div class="table-scroll">
     <table>
-      <thead><tr><th>EVENT</th><th>VALUE</th><th>PUBLISHED</th><th>RECEIVED</th></tr></thead><tbody
-        >{#each recent as reading (reading.id)}<tr
-            ><td><span class="event-dot"></span>{reading.eventName}</td><td class="table-value"
-              >{reading.counter}</td
-            ><td>{time(reading.publishedAt)}</td><td>{time(reading.receivedAt)}</td></tr
+      <thead><tr><th>DATE</th><th>START</th><th>DURATION</th><th>REPS</th><th>PACE</th></tr></thead
+      ><tbody
+        >{#each recent as set (set.id)}<tr
+            ><td><span class="event-dot"></span>{date(set.startedAt)}</td><td
+              >{time(set.startedAt)}</td
+            ><td>{duration(set.durationS)}</td><td class="table-value">{set.reps}</td><td
+              >{set.paceS === null ? '—' : `${set.paceS} s/rep`}</td
+            ></tr
           >{:else}<tr
-            ><td colspan="4" class="muted">No recorded events yet. Check collector status below.</td
+            ><td colspan="5" class="muted">No finished sets yet. Check collector status below.</td
             ></tr
           >{/each}</tbody
       >

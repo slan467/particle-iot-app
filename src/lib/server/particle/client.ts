@@ -2,9 +2,17 @@ import type { AppConfig } from '../config';
 import { ParticleAuth } from './auth';
 import { ParticleError, retryAfter } from './errors';
 import { EventParser, type StreamEvent } from './events';
-import { MAX_COUNTER } from '../counter';
+import {
+  isInteger,
+  MAX_INT,
+  MAX_REPS,
+  RESET_ARGUMENT,
+  VARIABLES,
+  type DeviceControl,
+  type DeviceReading
+} from '../hantel';
 
-export class ParticleClient {
+export class ParticleClient implements DeviceControl {
   private auth: ParticleAuth;
   private devicePath: string;
 
@@ -17,23 +25,29 @@ export class ParticleClient {
     this.devicePath = `https://api.particle.io/v1${product}/devices/${encodeURIComponent(config.deviceId)}`;
   }
 
-  async readCounter(): Promise<number> {
-    const result = await this.call(`/${encodeURIComponent(this.config.variableName)}`, {
-      method: 'GET'
-    });
-    if (!Number.isSafeInteger(result.result) || result.result < 0 || result.result > MAX_COUNTER) {
-      throw new Error('Device returned an invalid counter.');
-    }
-    return result.result;
+  async readState(): Promise<DeviceReading> {
+    const [repetitions, totalCount, sensorOk] = await Promise.all(
+      Object.values(VARIABLES).map(async (name) => {
+        const result = await this.call(`/${encodeURIComponent(name)}`, { method: 'GET' });
+        return result.result as unknown;
+      })
+    );
+    if (!isInteger(repetitions, 0, MAX_REPS))
+      throw new Error('Device returned invalid repetitions.');
+    if (!isInteger(totalCount, 0, MAX_INT))
+      throw new Error('Device returned an invalid total count.');
+    // An int variable arrives as 0/1; accept a bool variable as well.
+    if (![0, 1, true, false].includes(sensorOk as number | boolean))
+      throw new Error('Device returned an invalid sensor status.');
+    return { repetitions, totalCount, sensorOk: sensorOk === 1 || sensorOk === true };
   }
 
-  async resetCounter(): Promise<number> {
+  async resetTotal(): Promise<number> {
     const result = await this.call(`/${encodeURIComponent(this.config.functionName)}`, {
       method: 'POST',
-      body: new URLSearchParams({ arg: '0' })
+      body: new URLSearchParams({ arg: RESET_ARGUMENT })
     });
-    if (typeof result.return_value !== 'number' || result.return_value < 0)
-      throw new Error('Device rejected the reset.');
+    if (result.return_value !== 0) throw new Error('Device rejected the reset.');
     return result.return_value;
   }
 

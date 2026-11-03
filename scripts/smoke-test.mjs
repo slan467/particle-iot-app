@@ -45,20 +45,24 @@ try {
   const startupDeadline = Date.now() + 15_000;
   while (!logs.includes('Listening on') && !exited && Date.now() < startupDeadline) await sleep(50);
   assert(logs.includes('Listening on'), 'Production server should announce startup.');
-  await sleep(11_500);
+  // The simulated dumbbell starts its first set within about 11 seconds.
+  await sleep(13_000);
   if (exited) throw new Error(`Production server exited early:\n${logs}`);
-  let response = await request('/api/readings');
+  let response = await request('/api/trainings');
   assert.equal(response.status, 200);
   assert.match(response.headers.get('cache-control'), /no-store/);
-  let snapshot = await response.json();
+  const snapshot = await response.json();
   assert(
     snapshot.status.saved >= 1,
     'collector should save a fresh event before any browser/API request'
   );
   assert.equal(snapshot.status.connection, 'connected');
-  assert(snapshot.readings.length >= 61);
-  assert(snapshot.latest.counter >= 6100);
-  assert.equal((await request('/api/readings?limit=9999')).status, 400);
+  assert.equal(snapshot.status.rejected, 0);
+  // 15 seeded sets (start + end each) plus the fresh start event.
+  assert(snapshot.events.length >= 31);
+  assert.equal(snapshot.latest.type, 'start');
+  assert.equal((await request('/api/trainings?limit=9999')).status, 400);
+  assert.equal((await request('/api/trainings?days=31')).status, 400);
   assert.equal(
     (
       await request('/api/device/reset', {
@@ -76,21 +80,28 @@ try {
   });
   assert.equal(response.status, 200, await response.clone().text());
   assert.equal((await response.json()).returnValue, 0);
-  response = await request('/api/device/variable');
-  const valueAfterReset = (await response.json()).value;
-  // The counter continues ticking every 100 ms after reset.
-  assert(Number.isInteger(valueAfterReset) && valueAfterReset >= 0 && valueAfterReset < 100);
-  snapshot = await (await request('/api/readings')).json();
-  assert.equal(snapshot.latest.counter, 0);
+  const state = await (await request('/api/device/state')).json();
+  // The set in progress keeps counting after the reset, but at most 15 repetitions.
+  assert(Number.isInteger(state.totalCount) && state.totalCount >= 0 && state.totalCount <= 15);
+  assert.equal(state.sensorOk, true);
+  // A second read within five seconds is served from the shared cache.
+  assert.equal((await (await request('/api/device/state')).json()).readAt, state.readAt);
   const html = await (await request('/')).text();
-  assert(html.includes('Device overview'));
+  assert(html.includes('Training overview'));
   assert(!html.includes('smoke-test-secret-must-not-leak'));
   assert(!JSON.stringify(snapshot).includes('smoke-test-secret-must-not-leak'));
   assert.equal((await request('/guide')).status, 200);
-  for (let i = 0; i < 18; i++) assert.equal((await request('/api/device/variable')).status, 200);
-  assert.equal((await request('/api/device/variable')).status, 429);
+  // Two device requests so far (reset + one uncached read); the budget allows 20 per minute.
+  const reset = () =>
+    request('/api/device/reset', {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+  for (let i = 0; i < 18; i++) assert.equal((await reset()).status, 200);
+  assert.equal((await reset()).status, 429);
   console.log(
-    'Production smoke checks passed: unattended startup, ingestion, history, controls, origin/rate limits, pages and secret boundary.'
+    'Production smoke checks passed: unattended startup, set ingestion, history, device cache, controls, origin/rate limits, pages and secret boundary.'
   );
 } finally {
   server.kill('SIGTERM');

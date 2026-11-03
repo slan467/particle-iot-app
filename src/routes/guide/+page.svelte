@@ -1,49 +1,53 @@
 <svelte:head
   ><title>Project guide · Fieldwork IoT</title><meta
     name="description"
-    content="Connect your Photon 2 and turn the IoT starter into your own project."
+    content="How the IoT dumbbell counts repetitions and how to connect your own Photon 2."
   /></svelte:head
 >
 <header class="page-header">
   <div>
-    <div class="eyebrow">FROM IDEA TO SOMETHING CONNECTED</div>
-    <h1>Make it your own<span class="heading-dot">.</span></h1>
-    <p>Start with a counter. Build something that matters to you.</p>
+    <div class="eyebrow">FROM MOVEMENT TO DATA</div>
+    <h1>How it works<span class="heading-dot">.</span></h1>
+    <p>A sensor, a few thresholds and a dashboard that remembers every set.</p>
   </div>
 </header>
 <div class="guide-grid">
   <section class="panel guide-card">
-    <span class="step-number">01 / EXPLORE</span>
-    <h2>Follow one reading</h2>
+    <span class="step-number">01 / COUNT</span>
+    <h2>One lift, one repetition</h2>
     <p>
-      The simulated device publishes an event approximately every ten seconds. The server validates
-      and stores it. The dashboard asks for recent readings every ten seconds.
+      The LIS3DH sensor measures acceleration 20 times per second. A repetition is counted when the
+      smoothed Y axis moves from below 0.5 m/s² to above 2 m/s². After three regular repetitions the
+      firmware publishes a <code>start</code> event; five seconds without a repetition end the set
+      with an <code>end</code> event.
     </p>
-    <div class="flow-summary">Device → Particle → Collector → Store → Dashboard</div>
+    <div class="flow-summary">Dumbbell → Particle → Collector → Store → Dashboard</div>
     <a href="/" class="text-link">Explore the dashboard →</a>
   </section>
   <section class="panel guide-card">
-    <span class="step-number">02 / CONNECT</span>
-    <h2>Bring your Photon 2</h2>
+    <span class="step-number">02 / SIMULATE</span>
+    <h2>Test without the sensor first</h2>
     <p>
-      Follow <code>docs/particle-setup.md</code> to flash the example firmware, create a two-legged
-      OAuth client and configure MongoDB Atlas. Set <code>APP_MODE=live</code> in your local environment,
-      then restart.
+      Mock mode simulates the dumbbell inside the server. To test the cloud path with a real Photon
+      2 but no sensor, flash <code>firmware/hantelSim/hantelSim.cpp</code>. It publishes exactly the
+      same events and variables as the real firmware.
     </p>
     <p>
-      Keep credentials in <code>.env</code> locally and in Render’s environment settings when deployed.
+      Follow <code>docs/particle-setup.md</code> for credentials and MongoDB, set
+      <code>APP_MODE=live</code> in your local environment, then restart.
     </p>
   </section>
   <section class="panel guide-card">
-    <span class="step-number">03 / BUILD</span>
-    <h2>Give your agent a clear task</h2>
+    <span class="step-number">03 / CONNECT</span>
+    <h2>Switch to the real dumbbell</h2>
     <p>
-      Use the shared <code>add-iot-feature</code> skill in Copilot, Codex or Claude Code. Describe the
-      measurement, its unit, expected range and what a button should do.
+      Wire the LIS3DH (SDA=D0, SCL=D1, 3V3, GND) and flash
+      <code>firmware/hantelApp/IoTHantel.cpp</code>. The web application does not change. The sensor
+      badge shows whether the device found its sensor.
     </p>
     <blockquote>
-      “Trace CounterEvent from the Photon 2 firmware through validation and storage to the
-      dashboard. Explain how reading the counter variable and resetting it differ from event
+      “Trace a training set from the firmware’s end event through validation and storage to the bar
+      chart. Explain how reading the variables and resetting the total differ from event
       collection.”
     </blockquote>
   </section>
@@ -52,12 +56,12 @@
     <h2>Take it into the world</h2>
     <p>
       Deploy one server per team using <code>render.yaml</code>. Free instances sleep after 15
-      minutes without incoming requests; events during sleep are not recorded. Paid compute can
-      collect without an open dashboard.
+      minutes without incoming requests; sets finished during sleep are not recorded. Paid compute
+      can collect without an open dashboard.
     </p>
     <p>
-      Public controls are available to everyone. For pumps and other actuators, enforce safe
-      operating limits in the firmware.
+      Public controls are available to everyone. The only command resets the total count; stored
+      sets stay in the history.
     </p>
   </section>
 </div>

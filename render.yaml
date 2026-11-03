@@ -16,6 +16,6 @@ services:
       - key: HOST
         value: 0.0.0.0
       - key: READING_RETENTION_DAYS
-        value: 7
+        value: 30
       - key: SHUTDOWN_TIMEOUT
         value: 10

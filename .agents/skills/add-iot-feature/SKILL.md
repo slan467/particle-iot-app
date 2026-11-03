@@ -11,9 +11,9 @@ Translate the requested physical behavior into a concrete contract: event name a
 
 Implement a complete path through the affected layers:
 
-- Firmware registration, publication and input validation. Actuators need a firmware-enforced timeout and disconnected safe state appropriate to the requested device.
-- Shared `Reading`/API types and the counter-specific `normalizeEvent` extension point. Particle prefix filtering does not replace exact event/device checks. Keep publication and receipt timestamps distinct.
-- MongoDB document mapping, indexes/query bounds and an explicit plan for old data if the schema changes. Do not reinterpret old counter records as another measurement or delete history without authorization.
+- Firmware registration, publication and input validation in both `firmware/hantelApp/IoTHantel.cpp` and the simulator `firmware/hantelSim/hantelSim.cpp`; they must keep the same cloud contract. Actuators need a firmware-enforced timeout and disconnected safe state appropriate to the requested device.
+- Shared `TrainingEvent`/API types, the contract module `server/hantel.ts` and the dumbbell-specific `normalizeEvent` extension point in `server/training-events.ts`. Particle prefix filtering does not replace exact event/device checks. Keep publication and receipt timestamps distinct.
+- MongoDB document mapping, indexes/query bounds and an explicit plan for old data if the schema changes. Do not reinterpret old counter or training records as another measurement or delete history without authorization.
 - Server-side variable/function methods and allowed arguments. Public API callers must not select arbitrary Particle functions, devices or URLs.
 - Mock-device behavior, chart/labels, controls and useful user feedback. Mock mode must still start with no cloud credentials.
 - `.env.example`, payload documentation and any affected project examples or smoke assertions.

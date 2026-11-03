@@ -7,11 +7,11 @@ export const GET: RequestHandler = async ({ url }) => {
   try {
     query = parseHistory(url.searchParams);
   } catch {
-    return failure('Use minutes=1…1440 and limit=1…500.', 400);
+    return failure('Use days=1…30 and limit=1…500.', 400);
   }
   try {
     return Response.json(await (await getRuntime()).snapshot(query.since, query.limit));
   } catch {
-    return failure('Readings unavailable. Check MongoDB configuration and network access.');
+    return failure('Training history unavailable. Check MongoDB configuration and network access.');
   }
 };

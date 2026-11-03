@@ -11,7 +11,6 @@ export const variables = defineEnvVars({
   PARTICLE_DEVICE_ID: optional,
   PARTICLE_PRODUCT_ID: optional,
   PARTICLE_EVENT_NAME: optional,
-  PARTICLE_VARIABLE_NAME: optional,
   PARTICLE_FUNCTION_NAME: optional,
   MONGODB_URI: optional,
   MONGODB_DATABASE: optional,

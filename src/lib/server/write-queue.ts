@@ -1,28 +1,28 @@
-import type { Reading, CollectorStatus } from '../types';
-import type { ReadingStore } from './readings';
+import type { TrainingEvent, CollectorStatus } from '../types';
+import type { TrainingEventStore } from './training-events';
 import { pause } from './async';
 
 /** One writer, capped memory, bounded retries. This is not a durable message broker. */
 export class WriteQueue {
-  private items: Reading[] = [];
+  private items: TrainingEvent[] = [];
   private running?: Promise<void>;
   private accepting = true;
   private abort = new AbortController();
 
   constructor(
-    private store: ReadingStore,
+    private store: TrainingEventStore,
     private status: CollectorStatus,
     private capacity = 100,
     private retryDelayMs = 1000
   ) {}
 
-  enqueue(reading: Reading) {
+  enqueue(event: TrainingEvent) {
     if (!this.accepting || this.status.pending >= this.capacity) {
       this.status.dropped++;
-      this.status.storageError = 'Write queue is full or stopping. A reading was dropped.';
+      this.status.storageError = 'Write queue is full or stopping. An event was dropped.';
       return;
     }
-    this.items.push(reading);
+    this.items.push(event);
     this.status.pending++;
     this.kick();
   }
@@ -37,11 +37,11 @@ export class WriteQueue {
 
   private async flush() {
     while (this.items.length && !this.abort.signal.aborted) {
-      const reading = this.items.shift()!;
+      const event = this.items.shift()!;
       let completed = false;
       for (let attempt = 0; attempt < 3 && !this.abort.signal.aborted; attempt++) {
         try {
-          const inserted = await this.store.insert(reading);
+          const inserted = await this.store.insert(event);
           if (inserted) this.status.saved++;
           else this.status.duplicates++;
           this.status.lastWriteAt = new Date().toISOString();

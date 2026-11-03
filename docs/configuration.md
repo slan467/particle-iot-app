@@ -11,12 +11,11 @@ SvelteKit 3 declarations in `src/env.ts` make application variables private and 
 | `PARTICLE_CLIENT_SECRET` | empty                                                         | OAuth client secret; required live                                                  |
 | `PARTICLE_DEVICE_ID`     | simulator ID in mock                                          | 24-character hexadecimal Photon 2 ID; required live                                 |
 | `PARTICLE_PRODUCT_ID`    | empty                                                         | Optional product ID/slug; leave blank for personal Sandbox devices                  |
-| `PARTICLE_EVENT_NAME`    | `CounterEvent`                                                | Exact event to accept; stream prefix is checked again                               |
-| `PARTICLE_VARIABLE_NAME` | `counter`                                                     | Only device variable exposed by the read endpoint                                   |
-| `PARTICLE_FUNCTION_NAME` | `setCounter`                                                  | Only function exposed by reset; argument stays fixed at `"0"`                       |
+| `PARTICLE_EVENT_NAME`    | `training`                                                    | Exact event to accept; stream prefix is checked again                               |
+| `PARTICLE_FUNCTION_NAME` | `resetTotal`                                                  | Only function exposed by reset; argument stays fixed at `"0"`                       |
 | `MONGODB_URI`            | empty                                                         | MongoDB URI, including credentials; required live                                   |
-| `MONGODB_DATABASE`       | `iot_starter`                                                 | Database containing the `readings` collection                                       |
-| `READING_RETENTION_DAYS` | `7`                                                           | Integer 1–365; expiration age for newly inserted live records                       |
+| `MONGODB_DATABASE`       | `iot_starter`                                                 | Database containing the `training_events` collection                                |
+| `READING_RETENTION_DAYS` | `30`                                                          | Integer 1–365; expiration age for newly inserted live records                       |
 | `APP_ORIGIN`             | request-derived in dev; local URL or Render URL in production | Exact allowed browser origin for JSON commands, e.g. `https://example.onrender.com` |
 | `HOST`                   | adapter default                                               | Set `0.0.0.0` on Render; keep local Vite bound to loopback                          |
 | `PORT`                   | adapter default                                               | Production listen port; Render supplies its own                                     |
@@ -31,3 +30,7 @@ Never add credentials to `PUBLIC_*` or `VITE_*` variables, source files, agent p
 Use a different Particle client, Atlas database user and deployment per team. If a secret is accidentally committed, rotate it at its provider; removing the latest file does not remove the secret from Git history.
 
 Mock mode ignores cloud credentials and uses an in-memory store. Switching to live mode does not migrate its sample data.
+
+The three device variables `repetitions`, `totalCount` and `sensorOk` are fixed in `src/lib/server/hantel.ts` rather than configurable, so the browser can never choose which variable is read. The earlier `PARTICLE_VARIABLE_NAME` setting no longer exists and is ignored if still present.
+
+**Upgrading from the counter template:** an existing `.env` copied from the old example still contains `PARTICLE_EVENT_NAME=CounterEvent` and `PARTICLE_FUNCTION_NAME=setCounter`. Change them to `training` and `resetTotal` (or delete both lines to use the defaults). With the old values, every dumbbell event would be ignored and reset would call a function the firmware does not have. The retention default rose from 7 to 30 days so the 30-day view has data; it applies to newly inserted records only.

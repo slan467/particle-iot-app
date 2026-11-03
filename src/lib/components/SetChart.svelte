@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { Reading } from '#lib/types.ts';
+  import type { TrainingSet } from '#lib/types.ts';
   import { onMount } from 'svelte';
-  let { readings }: { readings: Reading[] } = $props();
+  let { sets, days }: { sets: TrainingSet[]; days: number } = $props();
   let width = $state(820);
   let chart = $state<SVGSVGElement>();
   const height = 210,
@@ -9,20 +9,16 @@
     right = 12,
     top = 15,
     bottom = 30;
-  let minTime = $derived(readings.length ? Date.parse(readings[0].publishedAt) : 0);
-  let maxTime = $derived(
-    readings.length ? Date.parse(readings[readings.length - 1].publishedAt) : 1
+  // Half an hour of padding keeps the first and last bar inside the plot.
+  let minTime = $derived(sets.length ? Date.parse(sets[0].endedAt) - 1_800_000 : 0);
+  let maxTime = $derived(sets.length ? Date.parse(sets[sets.length - 1].endedAt) + 1_800_000 : 1);
+  let maxValue = $derived(Math.max(5, ...sets.map((set) => set.reps)) * 1.1);
+  let barWidth = $derived(
+    Math.min(18, Math.max(3, (width - left - right) / Math.max(1, sets.length) / 1.6))
   );
-  let maxValue = $derived(Math.max(5, ...readings.map((r) => r.counter)) * 1.1);
   const x = (time: string) =>
     left + ((Date.parse(time) - minTime) / Math.max(1, maxTime - minTime)) * (width - left - right);
   const y = (value: number) => height - bottom - (value / maxValue) * (height - top - bottom);
-  let points = $derived(readings.map((r) => `${x(r.publishedAt)},${y(r.counter)}`).join(' '));
-  let area = $derived(
-    readings.length
-      ? `${x(readings[0].publishedAt)},${height - bottom} ${points} ${x(readings[readings.length - 1].publishedAt)},${height - bottom}`
-      : ''
-  );
   let hydrated = $state(false);
   onMount(() => {
     hydrated = true;
@@ -35,17 +31,22 @@
     observer.observe(chart);
     return () => observer.disconnect();
   });
+  // Longer ranges need the date; one day only needs the time.
   const time = (value: string) =>
     hydrated
-      ? new Date(value).toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
-        })
-      : new Date(value).toISOString().slice(11, 19) + ' UTC';
+      ? new Date(value).toLocaleString(
+          [],
+          days > 1
+            ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
+            : { hour: '2-digit', minute: '2-digit' }
+        )
+      : new Date(value)
+          .toISOString()
+          .slice(days > 1 ? 5 : 11, 16)
+          .replace('T', ' ') + ' UTC';
 </script>
 
-{#if readings.length}
+{#if sets.length}
   <svg
     bind:this={chart}
     class="history-chart"
@@ -53,19 +54,11 @@
     role="img"
     aria-labelledby="chart-title chart-description"
   >
-    <title id="chart-title">Counter history</title>
+    <title id="chart-title">Repetitions per set</title>
     <desc id="chart-description"
-      >{readings.length} readings, from {readings[0].counter} to {readings[readings.length - 1]
-        .counter}. Recent values are listed in the event table below.</desc
-    >
-    <defs
-      ><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"
-        ><stop offset="0%" stop-color="#80b78e" stop-opacity="0.25" /><stop
-          offset="100%"
-          stop-color="#80b78e"
-          stop-opacity="0.02"
-        /></linearGradient
-      ></defs
+      >{sets.length} sets with {Math.min(...sets.map((set) => set.reps))} to {Math.max(
+        ...sets.map((set) => set.reps)
+      )} repetitions. Recent sets are listed in the table below.</desc
     >
     {#each [0, 0.25, 0.5, 0.75, 1] as fraction}
       <line
@@ -80,33 +73,27 @@
         >{Math.round(maxValue * fraction)}</text
       >
     {/each}
-    <polygon points={area} fill="url(#chart-fill)" />
-    <polyline {points} fill="none" stroke="#34715a" stroke-width="2.5" stroke-linejoin="round" />
-    {#if readings.length === 1}<circle
-        cx={x(readings[0].publishedAt)}
-        cy={y(readings[0].counter)}
-        r="4"
-        fill="#34715a"
-      />{/if}
-    <circle
-      cx={x(readings[readings.length - 1].publishedAt)}
-      cy={y(readings[readings.length - 1].counter)}
-      r="4"
-      fill="#34715a"
-      stroke="white"
-      stroke-width="2"
-    />
-    <text x={left} y={height - 5} class="chart-label">{time(readings[0].publishedAt)}</text>
-    {#if readings.length > 1}<text
+    {#each sets as set (set.id)}
+      <rect
+        class="chart-bar"
+        x={x(set.endedAt) - barWidth / 2}
+        y={y(set.reps)}
+        width={barWidth}
+        height={height - bottom - y(set.reps)}
+        rx="2"><title>{set.reps} reps · {time(set.endedAt)}</title></rect
+      >
+    {/each}
+    <text x={left} y={height - 5} class="chart-label">{time(sets[0].endedAt)}</text>
+    {#if sets.length > 1}<text
         x={width - right}
         y={height - 5}
         text-anchor="end"
-        class="chart-label">{time(readings[readings.length - 1].publishedAt)}</text
+        class="chart-label">{time(sets[sets.length - 1].endedAt)}</text
       >{/if}
   </svg>
 {:else}
   <div class="empty-chart">
-    <span aria-hidden="true">∿</span><strong>Waiting for the next reading</strong>
-    <p>New events will appear here automatically.</p>
+    <span aria-hidden="true">∿</span><strong>No finished sets in this range</strong>
+    <p>Pick up the dumbbell. A set appears here after its last repetition.</p>
   </div>
 {/if}
