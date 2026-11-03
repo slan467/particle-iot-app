@@ -1,0 +1,11 @@
+node_modules
+.svelte-kit
+build
+test-results
+playwright-report
+package-lock.json
+.agents
+.claude
+.github/skills
+firmware
+.env*

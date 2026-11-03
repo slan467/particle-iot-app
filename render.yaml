@@ -1,0 +1,21 @@
+# One Node process per team. No webhooks or background-worker service required.
+services:
+  - type: web
+    name: particle-iot-starter
+    runtime: node
+    plan: free
+    numInstances: 1
+    buildCommand: npm ci --include=dev && npm run check && npm test && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24
+      - key: APP_MODE
+        value: mock
+      - key: HOST
+        value: 0.0.0.0
+      - key: READING_RETENTION_DAYS
+        value: 7
+      - key: SHUTDOWN_TIMEOUT
+        value: 10
